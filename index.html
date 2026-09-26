@@ -673,17 +673,8 @@ Content-Type: text/html; charset="UTF-8"
             const handleDrop = async (e) => {
                 e.preventDefault();
                 setDragActive(false);
-                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                    const file = e.dataTransfer.files[0];
-                    if (!file.name.endsWith('.eml') && !file.name.endsWith('.txt') && file.type !== 'message/rfc822') {
-                        showToast('Please upload a valid .eml file format.', 'warning');
-                    }
-                    const reader = new FileReader();
-                    reader.onload = (evt) => {
-                        handleAnalyzeEml(evt.target.result, file.name);
-                    };
-                    reader.readAsText(file);
-                }
+                const file = e.dataTransfer.files && e.dataTransfer.files[0];
+                if (file) handleAnalyzeFile(file);
             };
 
             // Download PDF Forensic Report
@@ -1229,11 +1220,7 @@ Content-Type: text/html; charset="UTF-8"
                                                 className="hidden"
                                                 id="emlFileInput"
                                                 onChange={(e) => {
-                                                    if (e.target.files[0]) {
-                                                        const reader = new FileReader();
-                                                        reader.onload = (evt) => handleAnalyzeEml(evt.target.result, e.target.files[0].name);
-                                                        reader.readAsText(e.target.files[0]);
-                                                    }
+                                                    if (e.target.files[0]) handleAnalyzeFile(e.target.files[0]);
                                                 }}
                                             />
                                             <label htmlFor="emlFileInput" className="cursor-pointer flex flex-col items-center">
