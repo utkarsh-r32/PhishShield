@@ -1728,9 +1728,9 @@ Content-Type: text/html; charset="UTF-8"
                                         </div>
 
                                         <div className="p-4 rounded-xl bg-gray-800/40 border border-gray-700/60 space-y-2 text-xs">
-                                            <h3 className="text-xs font-bold uppercase text-gray-400 mb-2">Seed Authentication Credentials</h3>
-                                            <p className="text-gray-300">Admin Username: <code className="text-teal-400 code-font">admin@phishshield.sec</code></p>
-                                            <p className="text-gray-300">Default Hash: <code className="text-teal-400 code-font">ARGON2id$v=19$m=65536...</code> (Never stored plain text)</p>
+                                            <h3 className="text-xs font-bold uppercase text-gray-400 mb-2">Production Authentication</h3>
+                                            <p className="text-gray-300">Passwords are hashed server-side with bcrypt and sessions use HTTP-only cookies.</p>
+                                            <p className="text-gray-500">The initial administrator credentials are supplied through Render environment variables and are never hard-coded in the frontend.</p>
                                         </div>
                                     </div>
                                 </div>
