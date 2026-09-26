@@ -335,7 +335,7 @@ app.get('/api/intel/domain', authRequired, async (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname)));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get(/.*/, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });
