@@ -514,6 +514,11 @@ Content-Type: text/html; charset="UTF-8"
 
             // Toast Message Notification State
             const [toast, setToast] = useState(null);
+            const [adminUsers, setAdminUsers] = useState([]);
+            const [newUserName, setNewUserName] = useState('');
+            const [newUserEmail, setNewUserEmail] = useState('');
+            const [newUserPassword, setNewUserPassword] = useState('');
+            const [newUserRole, setNewUserRole] = useState('ANALYST');
 
             const showToast = (message, type = 'info') => {
                 setToast({ message, type });
@@ -556,6 +561,43 @@ Content-Type: text/html; charset="UTF-8"
                 setInvestigations([]);
                 setCurrentAnalysis(null);
             };
+
+            const loadAdminUsers = async () => {
+                if (user?.role !== 'ADMIN') return;
+                try {
+                    const response = await fetch('/api/admin/users', { credentials: 'include' });
+                    if (response.ok) {
+                        const data = await response.json();
+                        setAdminUsers(data.users || []);
+                    }
+                } catch {}
+            };
+
+            const createAdminUser = async (e) => {
+                e.preventDefault();
+                try {
+                    const response = await fetch('/api/admin/users', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ name: newUserName, email: newUserEmail, password: newUserPassword, role: newUserRole })
+                    });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Could not create user');
+                    setNewUserName('');
+                    setNewUserEmail('');
+                    setNewUserPassword('');
+                    setNewUserRole('ANALYST');
+                    showToast('User created successfully.', 'success');
+                    loadAdminUsers();
+                } catch (err) {
+                    showToast(err.message, 'error');
+                }
+            };
+
+            useEffect(() => {
+                if (user?.role === 'ADMIN' && activeTab === 'admin') loadAdminUsers();
+            }, [user?.role, activeTab]);
 
             // Toggle Dark / Light Theme
             useEffect(() => {
@@ -1641,7 +1683,32 @@ Content-Type: text/html; charset="UTF-8"
                                         <span className="px-3 py-1 rounded-full bg-teal-500/10 text-teal-400 text-xs font-mono border border-teal-500/20">ROLE: ADMIN</span>
                                     </div>
 
-                                    <div className="space-y-4">
+                                    <div className="p-4 rounded-xl bg-gray-800/40 border border-gray-700/60 space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-xs font-bold uppercase text-gray-400">User Administration</h3>
+                                    <button onClick={loadAdminUsers} className="text-[10px] text-teal-400 hover:text-teal-300">Refresh</button>
+                                </div>
+                                <form onSubmit={createAdminUser} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <input required value={newUserName} onChange={e=>setNewUserName(e.target.value)} placeholder="Full name" className="px-3 py-2 rounded-lg bg-gray-950 border border-gray-700 text-xs" />
+                                    <input required type="email" value={newUserEmail} onChange={e=>setNewUserEmail(e.target.value)} placeholder="Email" className="px-3 py-2 rounded-lg bg-gray-950 border border-gray-700 text-xs" />
+                                    <input required minLength="10" type="password" value={newUserPassword} onChange={e=>setNewUserPassword(e.target.value)} placeholder="Temporary password (10+ chars)" className="px-3 py-2 rounded-lg bg-gray-950 border border-gray-700 text-xs" />
+                                    <select value={newUserRole} onChange={e=>setNewUserRole(e.target.value)} className="px-3 py-2 rounded-lg bg-gray-950 border border-gray-700 text-xs">
+                                        <option value="ANALYST">ANALYST</option>
+                                        <option value="ADMIN">ADMIN</option>
+                                    </select>
+                                    <button className="sm:col-span-2 py-2 rounded-lg bg-teal-500 text-gray-950 font-bold text-xs">Create User</button>
+                                </form>
+                                <div className="space-y-2 max-h-56 overflow-y-auto">
+                                    {adminUsers.map(u => (
+                                        <div key={u.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-950/60 border border-gray-800 text-xs">
+                                            <div><strong>{u.name}</strong><div className="text-gray-500">{u.email}</div></div>
+                                            <span className="text-teal-400 font-mono">{u.role}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
                                         <div className="p-4 rounded-xl bg-gray-800/40 border border-gray-700/60 space-y-3">
                                             <h3 className="text-xs font-bold uppercase text-gray-400">Risk Weight Settings</h3>
                                             <div className="space-y-2 text-xs">
