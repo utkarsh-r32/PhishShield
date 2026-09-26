@@ -884,7 +884,7 @@ Content-Type: text/html; charset="UTF-8"
                 setIsIntelLoading(true);
                 setIntelResult(null);
                 try {
-                    const domain = target.replace(/^https?:\\/\\//, '').split('/')[0];
+                    const domain = target.replace(/^https?:\/\//, '').split('/')[0];
                     const response = await fetch('/api/intel/domain?domain=' + encodeURIComponent(domain), { credentials: 'include' });
                     const data = await response.json();
                     if (response.status === 401) {
