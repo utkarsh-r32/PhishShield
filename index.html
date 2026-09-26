@@ -669,6 +669,45 @@ Content-Type: text/html; charset="UTF-8"
                 }
             };
 
+            const handleAnalyzeFile = async (file) => {
+                if (!file) return;
+                if (!user) {
+                    setAuthRequired(true);
+                    return;
+                }
+                if (!file.name.toLowerCase().endsWith('.eml') && file.type !== 'message/rfc822') {
+                    showToast('Please upload a valid .eml file.', 'warning');
+                    return;
+                }
+                setIsAnalyzing(true);
+                try {
+                    const formData = new FormData();
+                    formData.append('emailFile', file);
+                    const response = await fetch('/api/v1/analyze-eml', {
+                        method: 'POST',
+                        credentials: 'include',
+                        body: formData
+                    });
+                    const data = await response.json();
+                    if (response.status === 401) {
+                        setUser(null);
+                        setAuthRequired(true);
+                        throw new Error('Your session has expired. Please sign in again.');
+                    }
+                    if (!response.ok) throw new Error(data.error || 'Server-side file analysis failed');
+                    const result = data.investigation;
+                    setInvestigations(prev => [result, ...prev]);
+                    setCurrentAnalysis(result);
+                    setActiveTab('analyzer');
+                    showToast('File analyzed and saved. Risk Score: ' + result.scoring.score + '/100', result.scoring.score >= 50 ? 'warning' : 'success');
+                } catch (err) {
+                    console.error('File analysis error:', err);
+                    showToast(err.message || 'Failed to analyze file.', 'error');
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            };
+
             // Drag and drop event handlers
             const handleDrop = async (e) => {
                 e.preventDefault();
