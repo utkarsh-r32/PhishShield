@@ -481,11 +481,12 @@ Content-Type: text/html; charset="UTF-8"
             const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'analyzer', 'history', 'intel', 'admin', 'deployment'
 
             // User Auth & Role State
-            const [user, setUser] = useState({
-                name: 'Security Analyst',
-                email: 'analyst@phishshield.sec',
-                role: 'ADMIN' // 'ADMIN' or 'ANALYST'
-            });
+            const [user, setUser] = useState(null);
+            const [authRequired, setAuthRequired] = useState(false);
+            const [authChecking, setAuthChecking] = useState(true);
+            const [loginEmail, setLoginEmail] = useState('');
+            const [loginPassword, setLoginPassword] = useState('');
+            const [loginLoading, setLoginLoading] = useState(false);
 
             // Threat Intel API Keys (Stored locally for frontend testing demo)
             const [apiKeys, setApiKeys] = useState({
@@ -519,6 +520,43 @@ Content-Type: text/html; charset="UTF-8"
                 setTimeout(() => setToast(null), 4000);
             };
 
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                setLoginLoading(true);
+                try {
+                    const response = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ email: loginEmail, password: loginPassword })
+                    });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Login failed');
+                    setUser(data.user);
+                    setAuthRequired(false);
+                    setLoginPassword('');
+                    const historyResponse = await fetch('/api/investigations', { credentials: 'include' });
+                    if (historyResponse.ok) {
+                        const historyData = await historyResponse.json();
+                        setInvestigations(historyData.investigations || []);
+                        setCurrentAnalysis((historyData.investigations || [])[0] || null);
+                    }
+                    showToast('Signed in successfully.', 'success');
+                } catch (err) {
+                    showToast(err.message, 'error');
+                } finally {
+                    setLoginLoading(false);
+                }
+            };
+
+            const handleLogout = async () => {
+                try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch {}
+                setUser(null);
+                setAuthRequired(true);
+                setInvestigations([]);
+                setCurrentAnalysis(null);
+            };
+
             // Toggle Dark / Light Theme
             useEffect(() => {
                 if (darkMode) {
@@ -528,37 +566,62 @@ Content-Type: text/html; charset="UTF-8"
                 }
             }, [darkMode]);
 
-            // Initialize default sample data into history
+            // Restore the real server session and persistent investigation history.
             useEffect(() => {
-                const initSamples = async () => {
-                    const sample1 = await parseEmlContent(SAMPLE_EMAILS.phishing_paypal.raw);
-                    const sample2 = await parseEmlContent(SAMPLE_EMAILS.phishing_ceo.raw);
-                    const sample3 = await parseEmlContent(SAMPLE_EMAILS.legitimate_newsletter.raw);
-                    
-                    setInvestigations([sample1, sample2, sample3]);
-                    setCurrentAnalysis(sample1);
+                const bootstrapAuth = async () => {
+                    try {
+                        const response = await fetch('/api/auth/me', { credentials: 'include' });
+                        if (!response.ok) throw new Error('AUTH_REQUIRED');
+                        const data = await response.json();
+                        setUser(data.user);
+                        const historyResponse = await fetch('/api/investigations', { credentials: 'include' });
+                        if (historyResponse.ok) {
+                            const historyData = await historyResponse.json();
+                            setInvestigations(historyData.investigations || []);
+                            setCurrentAnalysis((historyData.investigations || [])[0] || null);
+                        }
+                    } catch {
+                        setAuthRequired(true);
+                    } finally {
+                        setAuthChecking(false);
+                    }
                 };
-                initSamples();
+                bootstrapAuth();
             }, []);
 
-            // Handle Email Parsing Action
+            // Server-side EML/text analysis with persistent database storage.
             const handleAnalyzeEml = async (emlText, titleHint = 'Uploaded File') => {
                 if (!emlText.trim()) {
                     showToast('Please provide valid .eml raw email text or file.', 'error');
                     return;
                 }
+                if (!user) {
+                    setAuthRequired(true);
+                    return;
+                }
                 setIsAnalyzing(true);
                 try {
-                    // Simulate progressive parsing delays for smooth visual UX
-                    await new Promise(r => setTimeout(r, 800));
-                    const result = await parseEmlContent(emlText);
+                    const response = await fetch('/api/v1/analyze-text', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ raw: emlText })
+                    });
+                    const data = await response.json();
+                    if (response.status === 401) {
+                        setUser(null);
+                        setAuthRequired(true);
+                        throw new Error('Your session has expired. Please sign in again.');
+                    }
+                    if (!response.ok) throw new Error(data.error || 'Server-side analysis failed');
+                    const result = data.investigation;
                     setInvestigations(prev => [result, ...prev]);
                     setCurrentAnalysis(result);
                     setActiveTab('analyzer');
-                    showToast(`Investigation ${result.id} created successfully! Risk Score: ${result.scoring.score}/100`, result.scoring.score >= 50 ? 'warning' : 'success');
+                    showToast('Investigation ' + result.id + ' saved. Risk Score: ' + result.scoring.score + '/100', result.scoring.score >= 50 ? 'warning' : 'success');
                 } catch (err) {
                     console.error('EML Parsing Error:', err);
-                    showToast('Failed to parse .eml content. Ensure format is valid RFC 822 text.', 'error');
+                    showToast(err.message || 'Failed to analyze email.', 'error');
                 } finally {
                     setIsAnalyzing(false);
                 }
@@ -735,42 +798,35 @@ Content-Type: text/html; charset="UTF-8"
                 }
             };
 
-            // Quick VirusTotal / URLScan Lookup Simulation
+            // Real server-side VirusTotal / URLScan lookup.
             const handleRunIntelLookup = async (query) => {
                 const target = query || intelQuery;
                 if (!target.trim()) {
                     showToast('Please enter a domain or URL for threat intelligence lookup.', 'warning');
                     return;
                 }
+                if (!user) {
+                    setAuthRequired(true);
+                    return;
+                }
                 setIsIntelLoading(true);
                 setIntelResult(null);
-
-                await new Promise(r => setTimeout(r, 1200));
-
-                const isKnownBad = /paypa1|malicious|phish|badsite|192\.168|hack/i.test(target);
-                
-                setIntelResult({
-                    query: target,
-                    timestamp: new Date().toLocaleString(),
-                    virustotal: {
-                        status: apiKeys.virustotal ? 'LIVE_API_SUCCESS' : 'MOCK_SANDBOX',
-                        malicious: isKnownBad ? 24 : 0,
-                        suspicious: isKnownBad ? 5 : 0,
-                        harmless: isKnownBad ? 43 : 72,
-                        scanDate: '2026-09-26',
-                        reputation: isKnownBad ? -65 : 85,
-                        tags: isKnownBad ? ['phishing', 'credential-harvester', 'social-engineering'] : ['clean', 'verified-domain']
-                    },
-                    urlscan: {
-                        status: apiKeys.urlscan ? 'LIVE_API_SUCCESS' : 'MOCK_SANDBOX',
-                        verdict: isKnownBad ? 'MALICIOUS' : 'CLEAN',
-                        score: isKnownBad ? 92 : 0,
-                        primaryIP: '185.220.101.5',
-                        country: 'US',
-                        screenshotPlaceholder: isKnownBad ? '🚨 High-risk login form clone detected' : '✅ Standard corporate landing page'
+                try {
+                    const domain = target.replace(/^https?:\\/\\//, '').split('/')[0];
+                    const response = await fetch('/api/intel/domain?domain=' + encodeURIComponent(domain), { credentials: 'include' });
+                    const data = await response.json();
+                    if (response.status === 401) {
+                        setUser(null);
+                        setAuthRequired(true);
+                        throw new Error('Your session has expired. Please sign in again.');
                     }
-                });
-                setIsIntelLoading(false);
+                    if (!response.ok) throw new Error(data.error || 'Threat intelligence lookup failed');
+                    setIntelResult({ query: target, timestamp: new Date().toLocaleString(), ...data });
+                } catch (err) {
+                    showToast(err.message, 'error');
+                } finally {
+                    setIsIntelLoading(false);
+                }
             };
 
             // Stats Aggregations for Executive Dashboard
@@ -781,6 +837,40 @@ Content-Type: text/html; charset="UTF-8"
             const totalUrlsAnalyzed = investigations.reduce((acc, i) => acc + i.urls.length, 0);
 
             return (
+                <>
+                {authChecking && (
+                    <div className="fixed inset-0 z-[100] bg-gray-950 flex items-center justify-center">
+                        <div className="text-center">
+                            <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-gradient-to-tr from-teal-500 to-cyan-500 flex items-center justify-center animate-pulse">
+                                <i className="fas fa-shield-halved text-gray-950 text-xl"></i>
+                            </div>
+                            <p className="text-gray-300 font-semibold">Initializing secure session...</p>
+                        </div>
+                    </div>
+                )}
+                {authRequired && !authChecking && (
+                    <div className="fixed inset-0 z-[100] bg-gray-950/95 backdrop-blur-sm flex items-center justify-center p-4">
+                        <form onSubmit={handleLogin} className="w-full max-w-md p-8 rounded-2xl border border-teal-500/30 bg-gray-900 shadow-2xl">
+                            <div className="flex items-center gap-3 mb-6">
+                                <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-teal-500 to-cyan-500 flex items-center justify-center">
+                                    <i className="fas fa-shield-halved text-gray-950 text-xl"></i>
+                                </div>
+                                <div>
+                                    <div className="text-xl font-extrabold text-white">PhishShield</div>
+                                    <div className="text-xs text-gray-400">Secure Analyst Sign In</div>
+                                </div>
+                            </div>
+                            <label className="block text-xs font-semibold text-gray-400 mb-2">EMAIL</label>
+                            <input value={loginEmail} onChange={e => setLoginEmail(e.target.value)} type="email" required className="w-full mb-4 px-4 py-3 rounded-xl bg-gray-950 border border-gray-700 text-white outline-none focus:border-teal-500" placeholder="analyst@example.com" />
+                            <label className="block text-xs font-semibold text-gray-400 mb-2">PASSWORD</label>
+                            <input value={loginPassword} onChange={e => setLoginPassword(e.target.value)} type="password" required className="w-full mb-6 px-4 py-3 rounded-xl bg-gray-950 border border-gray-700 text-white outline-none focus:border-teal-500" placeholder="••••••••••" />
+                            <button disabled={loginLoading} className="w-full py-3 rounded-xl bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-gray-950 font-bold">
+                                {loginLoading ? 'Signing in...' : 'Sign In'}
+                            </button>
+                            <p className="mt-4 text-[11px] text-gray-500">Accounts are managed by the PhishShield server. Passwords are never stored in the browser.</p>
+                        </form>
+                    </div>
+                )}
                 <div className={`min-h-screen flex flex-col ${darkMode ? 'bg-gray-950 text-gray-100' : 'bg-gray-50 text-gray-900'}`}>
                     
                     {/* Toast Notification Container */}
@@ -850,13 +940,16 @@ Content-Type: text/html; charset="UTF-8"
 
                                 <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-gray-700/50">
                                     <div className="w-8 h-8 rounded-full bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-400 font-bold text-xs">
-                                        {user.role === 'ADMIN' ? 'ADM' : 'ANA'}
+                                        {user?.role === 'ADMIN' ? 'ADM' : 'ANA'}
                                     </div>
                                     <div className="text-left text-xs">
-                                        <div className="font-semibold">{user.name}</div>
-                                        <div className="text-gray-400 text-[10px]">{user.role}</div>
+                                        <div className="font-semibold">{user?.name}</div>
+                                        <div className="text-gray-400 text-[10px]">{user?.role}</div>
                                     </div>
                                 </div>
+                                <button onClick={handleLogout} className="p-2.5 rounded-xl border border-gray-700 text-gray-400 hover:text-rose-400 hover:border-rose-500/40" title="Sign out">
+                                    <i className="fas fa-right-from-bracket"></i>
+                                </button>
                             </div>
                         </div>
                     </header>
@@ -1710,6 +1803,7 @@ app.listen(3000, () => console.log('PhishShield Backend active on port 3000'));`
                         </div>
                     </footer>
                 </div>
+                </>
             );
         }
 
