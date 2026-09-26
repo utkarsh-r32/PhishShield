@@ -290,6 +290,285 @@ async function saveInvestigation(req, result, filename) {
   await audit(req.user.sub, 'ANALYZE_EMAIL', req, { investigationId: result.id, score: result.scoring.score });
 }
 
+// ============================================================
+// Gmail Add-on Integration
+// ============================================================
+
+function generateGmailConnectionToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function hashGmailConnectionToken(token) {
+  return crypto
+    .createHash('sha256')
+    .update(token)
+    .digest('hex');
+}
+
+
+// Create a Gmail connection for the logged-in PhishShield user.
+app.post('/api/integrations/gmail/connect', authRequired, async (req, res) => {
+  try {
+    const token = generateGmailConnectionToken();
+    const tokenHash = hashGmailConnectionToken(token);
+
+    const connectionId = crypto.randomUUID();
+
+    await pool.query(
+      `INSERT INTO gmail_connections
+       (id, user_id, token_hash)
+       VALUES ($1, $2, $3)`,
+      [connectionId, req.user.sub, tokenHash]
+    );
+
+    await audit(
+      req.user.sub,
+      'GMAIL_INTEGRATION_CONNECTED',
+      req,
+      { connectionId }
+    );
+
+    res.json({
+      success: true,
+      connectionId,
+      token
+    });
+
+  } catch (e) {
+    console.error('Gmail connection error:', e);
+    res.status(500).json({
+      error: 'Failed to create Gmail connection'
+    });
+  }
+});
+
+
+// Revoke all Gmail connections for the logged-in user.
+app.post('/api/integrations/gmail/revoke', authRequired, async (req, res) => {
+  try {
+
+    await pool.query(
+      `UPDATE gmail_connections
+       SET revoked_at = NOW()
+       WHERE user_id = $1
+       AND revoked_at IS NULL`,
+      [req.user.sub]
+    );
+
+    await audit(
+      req.user.sub,
+      'GMAIL_INTEGRATION_REVOKED',
+      req
+    );
+
+    res.json({
+      success: true
+    });
+
+  } catch (e) {
+    console.error('Gmail revoke error:', e);
+
+    res.status(500).json({
+      error: 'Failed to revoke Gmail integration'
+    });
+  }
+});
+
+
+// Validate a Gmail connection token.
+async function authenticateGmailConnection(req, res, next) {
+
+  try {
+
+    const authHeader = String(
+      req.headers.authorization || ''
+    );
+
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        error: 'Gmail connection token required'
+      });
+    }
+
+    const token =
+      authHeader.slice('Bearer '.length).trim();
+
+    if (!token || token.length < 40) {
+      return res.status(401).json({
+        error: 'Invalid Gmail connection token'
+      });
+    }
+
+    const tokenHash =
+      hashGmailConnectionToken(token);
+
+    const { rows } = await pool.query(
+      `SELECT
+         gc.id AS connection_id,
+         gc.user_id,
+         u.email,
+         u.name,
+         u.role
+       FROM gmail_connections gc
+       JOIN users u ON u.id = gc.user_id
+       WHERE gc.token_hash = $1
+       AND gc.revoked_at IS NULL
+       AND u.is_active = true`,
+      [tokenHash]
+    );
+
+    if (!rows[0]) {
+      return res.status(401).json({
+        error: 'Invalid or revoked Gmail connection'
+      });
+    }
+
+    await pool.query(
+      `UPDATE gmail_connections
+       SET last_used_at = NOW()
+       WHERE id = $1`,
+      [rows[0].connection_id]
+    );
+
+    req.gmailUser = {
+      id: rows[0].user_id,
+      email: rows[0].email,
+      name: rows[0].name,
+      role: rows[0].role,
+      connectionId: rows[0].connection_id
+    };
+
+    next();
+
+  } catch (e) {
+
+    console.error(
+      'Gmail authentication error:',
+      e
+    );
+
+    res.status(500).json({
+      error: 'Gmail authentication failed'
+    });
+  }
+}
+
+
+// Analyze an email received from the Gmail add-on.
+app.post(
+  '/api/v1/analyze-gmail',
+  authenticateGmailConnection,
+  async (req, res) => {
+
+    try {
+
+      const message =
+        req.body?.message || {};
+
+      const from =
+        String(message.from || '').trim();
+
+      const to =
+        String(message.to || '').trim();
+
+      const cc =
+        String(message.cc || '').trim();
+
+      const subject =
+        String(message.subject || '').trim();
+
+      const date =
+        String(message.date || '').trim();
+
+      const body =
+        String(message.body || '');
+
+      if (!from && !subject && !body) {
+        return res.status(400).json({
+          error: 'No email content was provided'
+        });
+      }
+
+      // Reconstruct a standard email message so that
+      // the existing mailparser-based analyzer can be reused.
+      const rawEmail = [
+        `From: ${from || 'Unknown Sender'}`,
+        `To: ${to || 'Unknown Recipient'}`,
+        cc ? `Cc: ${cc}` : '',
+        `Subject: ${subject || '(No Subject)'}`,
+        date ? `Date: ${date}` : '',
+        'Content-Type: text/plain; charset="UTF-8"',
+        '',
+        body
+      ]
+        .filter(Boolean)
+        .join('\r\n');
+
+      const rawBuffer =
+        Buffer.from(rawEmail, 'utf8');
+
+      const parsed =
+        await simpleParser(rawBuffer);
+
+      const result =
+        analyzeParsedEmail(
+          parsed,
+          rawBuffer
+        );
+
+      result.filename =
+        'gmail-message.eml';
+
+      // Save the investigation under the
+      // PhishShield account that owns the connection.
+      await pool.query(
+        `INSERT INTO investigations
+         (id,user_id,filename,subject,sender,recipient,
+          risk_score,risk_category,result)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          result.id,
+          req.gmailUser.id,
+          result.filename,
+          result.headers.subject,
+          result.headers.from,
+          result.headers.to,
+          result.scoring.score,
+          result.scoring.riskCategory,
+          JSON.stringify(result)
+        ]
+      );
+
+      await audit(
+        req.gmailUser.id,
+        'GMAIL_ANALYZE_EMAIL',
+        req,
+        {
+          investigationId: result.id,
+          score: result.scoring.score,
+          connectionId: req.gmailUser.connectionId
+        }
+      );
+
+      res.json({
+        success: true,
+        investigation: result
+      });
+
+    } catch (e) {
+
+      console.error(
+        'Gmail email analysis error:',
+        e
+      );
+
+      res.status(400).json({
+        error: 'Failed to analyze Gmail message'
+      });
+    }
+  }
+);
+
 app.post('/api/v1/analyze-eml', authRequired, upload.single('emailFile'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'emailFile is required' });

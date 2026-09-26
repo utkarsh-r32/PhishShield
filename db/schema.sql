@@ -36,3 +36,19 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created
   ON audit_logs(created_at DESC);
+
+-- Gmail add-on connection tokens
+CREATE TABLE IF NOT EXISTS gmail_connections (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_gmail_connections_user
+  ON gmail_connections(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_gmail_connections_token_hash
+  ON gmail_connections(token_hash);
