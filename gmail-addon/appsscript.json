@@ -10,7 +10,7 @@
   "addOns": {
     "common": {
       "name": "PhishShield",
-      "logoUrl": "https://phishshield-app.onrender.com/favicon.ico",
+      "logoUrl": "https://phishshield-app.onrender.com/phishshield-logo.png",
       "layoutProperties": {
         "primaryColor": "#2563eb",
         "secondaryColor": "#1e40af"

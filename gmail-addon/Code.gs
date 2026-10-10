@@ -234,7 +234,8 @@ function saveConnectionToken(e) {
     if (status === 401) {
 
       return createErrorCard(
-        'The PhishShield connection token is invalid or revoked.'
+        'The PhishShield connection token is invalid or revoked. Please check it and try again.',
+        true
       );
     }
 
@@ -242,6 +243,21 @@ function saveConnectionToken(e) {
 
       return createErrorCard(
         'PhishShield server is currently unavailable.'
+      );
+    }
+
+    if (status !== 400 && (status < 200 || status >= 300)) {
+
+      console.error(
+        'PhishShield token validation error:',
+        status,
+        testResponse.getContentText()
+      );
+
+      return createErrorCard(
+        'PhishShield could not validate the connection token (HTTP ' +
+        status +
+        '). Please try again.'
       );
     }
 
@@ -488,7 +504,8 @@ function sendToPhishShield(payload) {
         );
 
       return createErrorCard(
-        'Your PhishShield connection has expired or been revoked. Please reconnect.'
+        'Your PhishShield connection has expired or been revoked. Reconnect to continue.',
+        true
       );
     }
 
@@ -541,12 +558,25 @@ function createResultCard(result) {
     investigation.scoring ||
     {};
 
+  const rawScore =
+    scoring.score === null || scoring.score === undefined
+      ? NaN
+      : Number(scoring.score);
+
   const score =
-    scoring.score ?? 0;
+    Number.isFinite(rawScore) &&
+    rawScore >= 0 &&
+    rawScore <= 100
+      ? Math.round(rawScore)
+      : null;
 
   const risk =
-    scoring.riskCategory ||
-    'UNKNOWN';
+    String(scoring.riskCategory || '')
+      .trim()
+      .toUpperCase();
+
+  const presentation =
+    getRiskPresentation(risk, score);
 
   const factors =
     scoring.factors ||
@@ -596,7 +626,7 @@ function createResultCard(result) {
       CardService.newCardHeader()
 
         .setTitle(
-          'PhishShield Result'
+          'PhishShield'
         )
 
         .setSubtitle(
@@ -612,10 +642,15 @@ function createResultCard(result) {
 
           CardService.newTextParagraph()
             .setText(
-              '<b>Risk Level</b><br>' +
-              '<font size="large">' +
-              escapeHtml(risk) +
-              '</font>'
+              '<b>SECURITY STATUS</b><br><br>' +
+              '<font color="' +
+              presentation.color +
+              '" size="large"><b>' +
+              presentation.icon +
+              ' ' +
+              escapeHtml(presentation.label) +
+              '</b></font><br><br>' +
+              presentation.guidance
             )
         )
 
@@ -623,9 +658,11 @@ function createResultCard(result) {
 
           CardService.newTextParagraph()
             .setText(
-              '<b>Risk Score</b><br>' +
-              String(score) +
-              ' / 100'
+              '<b>RISK SCORE</b><br>' +
+              '<font size="large"><b>' +
+              (score === null ? '—' : String(score)) +
+              ' / 100</b></font><br>' +
+              'Higher scores indicate greater phishing risk.'
             )
         )
 
@@ -675,11 +712,82 @@ function createResultCard(result) {
     .build();
 }
 
+function getRiskPresentation(risk, score) {
+
+  if (risk === 'CRITICAL' || score >= 75) {
+    return {
+      label: 'CRITICAL RISK',
+      icon: '🚨',
+      color: '#b3261e',
+      guidance: 'Do not click links or open attachments.'
+    };
+  }
+
+  if (risk === 'HIGH RISK' || score >= 50) {
+    return {
+      label: 'HIGH RISK',
+      icon: '🔴',
+      color: '#b3261e',
+      guidance: 'Verify the sender through a trusted channel.'
+    };
+  }
+
+  if (risk === 'SUSPICIOUS' || score >= 25) {
+    return {
+      label: 'SUSPICIOUS',
+      icon: '⚠️',
+      color: '#b06000',
+      guidance: 'Review links, sender details, and requests carefully.'
+    };
+  }
+
+  if (risk === 'SAFE' || score !== null) {
+    return {
+      label: 'LOW RISK',
+      icon: '✅',
+      color: '#137333',
+      guidance: 'No major phishing indicators were detected.'
+    };
+  }
+
+  return {
+    label: 'UNKNOWN',
+    icon: '❔',
+    color: '#5f6368',
+    guidance: 'Review the full investigation before interacting.'
+  };
+}
+
 
 /**
  * Display an error.
  */
-function createErrorCard(message) {
+function createErrorCard(message, allowReconnect) {
+
+  const section =
+    CardService.newCardSection()
+      .addWidget(
+        CardService.newTextParagraph()
+          .setText(
+            '<b>Something went wrong.</b>' +
+            '<br><br>' +
+            escapeHtml(message)
+          )
+      );
+
+  if (allowReconnect) {
+    section.addWidget(
+      CardService.newTextButton()
+        .setText('Reconnect PhishShield')
+        .setTextButtonStyle(
+          CardService.TextButtonStyle.FILLED
+        )
+        .setOnClickAction(
+          CardService.newAction()
+            .setFunctionName('buildConnectCard')
+        )
+    );
+  }
 
   return CardService.newCardBuilder()
 
@@ -696,22 +804,7 @@ function createErrorCard(message) {
         )
     )
 
-    .addSection(
-
-      CardService.newCardSection()
-
-        .addWidget(
-
-          CardService.newTextParagraph()
-
-            .setText(
-              '<b>Something went wrong.</b>' +
-              '<br><br>' +
-              escapeHtml(message)
-            )
-        )
-
-    )
+    .addSection(section)
 
     .build();
 }
